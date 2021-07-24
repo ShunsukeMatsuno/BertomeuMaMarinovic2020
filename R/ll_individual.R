@@ -1,4 +1,4 @@
-ll_individual <- function(df_individual,
+ll_individual <- function(df_individual, x_random,
                           alpha, beta, sigma_x, sigma_e_hat, p_11, p_01,
                           Pnd_splined){
   # @input: data frame of each firm
@@ -31,10 +31,7 @@ ll_individual <- function(df_individual,
       
     }else{
       # integral part
-      x <- rnorm(1e3, 
-                 mean = sigma_x^2/sigma_e_hat^2,
-                 sd = sqrt(sigma_x^2 * (1 - sigma_x^2/sigma_e_hat^2)))
-      I <- mean(pnorm(alpha * (P_nd - x) - beta))
+      I <- mean(pnorm(alpha * (P_nd - x_random) - beta))
       
       # likelihood at time i
       v <- mat_individual[i,"p"] + (1 - mat_individual[i,"p"]) * I 
