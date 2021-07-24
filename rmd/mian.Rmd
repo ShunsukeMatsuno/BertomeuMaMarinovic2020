@@ -67,14 +67,12 @@ alpha <- 2.54
 beta <- .67
 
 # simulation
-df_gamma <- tibble(y = seq(-2, .5, .1)) %>% 
-  mutate(gamma = map_dbl(y, compute_Gamma, 
-                     p = p, sigma_x = sigma_x, alpha = alpha, beta = beta))
+Gamma_simulated <- compute_Gamma(p, sigma_x, alpha, beta)
 
 # plot
-ggplot(df_gamma, aes(y, gamma)) + 
-  geom_line() +
+ggplot(Gamma_simulated$df, aes(y, Gamma_val)) + 
   geom_point() + 
+  stat_function(fun = Gamma_simulated$fun) +
   geom_abline(slope = 1, intercept = 0, colour = "blue") +
   geom_vline(xintercept = 0, lty = 2) + 
   geom_hline(yintercept = 0, lty = 2) + 
