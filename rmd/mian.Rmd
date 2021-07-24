@@ -1,0 +1,387 @@
+---
+title: "Bertomeu, Ma, and Marinovic (2020, TAR)"
+author: "Shunsuke Matsuno"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Required Libraries
+```{r}
+pacman::p_load(tidyverse, ggplot2, patchwork, BertomeuMaMarinovic)
+```
+
+# Introduction
+- This note simulates BMM (2020).
+- Static model is omitted.
+
+# Multi-period Model
+
+## Fixed point of $\Gamma$
+- We simulate $\Gamma$ to see numerically that the function has a unique fixed point in the negative region. 
+- The function is given by
+$$
+\Gamma(y) = \frac{1-p_{t}}{p_{t}}\int_{-\infty}^{\infty}\frac{x_{t}}{\sigma_{x}}\phi\left(\frac{x_{t}+y}{\sigma_{x}}\right)\Phi\left(-\alpha x_{t}-\beta\right)dx_{t}.
+$$
+    - Note that the function involves an integration.
+- We use a simple Monte Carlo method to to evaluate $\Gamma(y)$.
+    - Fix $y$.
+    - By the change of variable $\xi_t = \frac{x_t + y}{\sigma_x}$, the integral is written as
+\begin{align*}
+\int_{-\infty}^{\infty} & \frac{x_{t}}{\sigma_{x}}\phi\left(\frac{x_{t}+y}{\sigma_{x}}\right)\Phi\left(-\alpha x_{t}-\beta\right)dx_{t}\\
+ & =\int_{-\infty}^{\infty}\left(\xi_{t}-\frac{y}{\sigma_{x}}\right)\phi\left(\xi_{t}\right)\Phi\left(-\alpha\sigma_{x}\xi_{t}+\alpha y-\beta\right)\sigma_{x}d\xi_{t}
+\end{align*}
+    - Write $g(\xi_{t})=\left(\xi_{t}-\frac{y}{\sigma_{x}}\right)\Phi\left(-\alpha\sigma_{x}\xi_{t}+\alpha y-\beta\right)\sigma_{x}$, so the integral is 
+$$
+\int_{-\infty}^{\infty}g(\xi_{t})\phi(\xi_{t})d\xi_{t}.
+$$
+    - Therefore, by simulating $\{\xi_t^s \}_{s=1}^{M}$ from $\mathcal{N}(0,1)$, we have
+$$
+M^{-1}\sum_{s=1}^{M}g(\xi_{t}^{s})\to_{p}\mathbb{E}[g(\xi_{t})]=\int_{-\infty}^{\infty}g(\xi_{t})\phi(\xi_{t})d\xi_{t}.
+$$
+    - We could use more sophisticated methods of numerical integration, but this simple Monte Carlo method suffices for our purpose.
+        - For example, try importance sampling. 
+    
+
+- Here is the code for $\Gamma(y)$.
+    - Note that $\Gamma$ depends on $(p_{t},\sigma_{x},\alpha,\beta)$, which are treated as parameters.
+```{r}
+# the definition of Gamma
+compute_Gamma
+```
+
+- For a set of parameters, we plot $\Gamma(p)$.
+    - The parameter values are take from Table 5.
+    - By changing parameter values (and the range of $y$), we can verify that a unique fixed point exists in the negative region. 
+    
+```{r}
+# parameters
+p <- .3
+sigma_x <- .32
+alpha <- 2.54
+beta <- .67
+
+# simulation
+df_gamma <- tibble(y = seq(-2, .5, .1)) %>% 
+  mutate(gamma = map_dbl(y, compute_Gamma, 
+                     p = p, sigma_x = sigma_x, alpha = alpha, beta = beta))
+
+# plot
+ggplot(df_gamma, aes(y, gamma)) + 
+  geom_line() +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, colour = "blue") +
+  geom_vline(xintercept = 0, lty = 2) + 
+  geom_hline(yintercept = 0, lty = 2) + 
+  theme_bw()
+```
+
+
+## Simulating Dyunamic Behavior
+- In this section, we simulate the dynamic disclosure model.
+    - Following the sample of the paper, the panel data is $N \times T$, where 
+        - $N$ = 1,000
+        - $T$ = 10
+- The parameters are taken from the results of the paper.
+```{r}
+set.seed(2021)
+
+# parameters
+p <- .35
+sigma_x <- .32
+sigma_e <- .74
+alpha <- 2.54
+beta <- .67
+p_11 <- .96    # Phi(1 | 1): prob of theta = 1 to 1
+p_01 = .11     # Phi(1 | 0): prob of theta = 0 to 1
+
+# data length
+N <- 3 * 1e3
+Time <- 10
+```
+
+
+
+- First, we simulate $\theta$, the value of friction.
+    - We draw tge initial value of $\theta_t$ from the Beta distribution. 
+    - The evolution is governed by `p_11` and `p_01`.
+    - $p_t = \mathbb{E}[\theta_t]$ is also computed.
+    
+```{r}
+# function that generates next theta by FOM
+simulate_friction
+```
+
+
+```{r}
+# simulation of p and theta
+df <- tibble(i = 1:N) %>% 
+  mutate(df_p_theta = map(.x = i, .f = simulate_friction,
+                           p_11 = p_11, p_01 = p_01, 
+                          p_init = rbeta(1, shape1 = 2, shape2 = 5),
+                           Time = Time)) %>% 
+  unnest(df_p_theta) %>% 
+  select(i, t, p, theta)
+
+
+# overall mean of theta
+df %>% pull(theta) %>% mean()
+```
+
+- Second, we simulate $x_t$ and observed earnings, $e_t$.
+    - Note that $x_t$ may not be observed for certain firms, so we will eliminate the value of $x_t$ for firms with information friction.
+    - We simulate $e_t \sim \mathcal{N}(0,\sigma_e^2)$ and then simulate $\tilde{x}\mid e_{t}\sim\mathcal{N}\left(\frac{\sigma_{x}^{2}}{\sigma_{e}^{2}}e_{t},\sigma_{x}^{2}\left(1-\frac{\sigma_{x}^{2}}{\sigma_{e}^{2}}\right)\right)$.
+        - See my note for the derivation.
+
+```{r}
+df <- df %>% 
+  mutate(e = rnorm(N*Time, sd = sigma_e)) %>% 
+  mutate(x = rnorm(N*Time, mean = (sigma_x^2)/(sigma_e^2) * e,
+                           sd   = sigma_x^2 * (1 - (sigma_x^2)/(sigma_e^2))))
+```
+
+
+- Next, we delete the private signal $x_t$ if the manager is informed ($\theta_t = 0$).
+```{r}
+df <- df %>% 
+  mutate(x = if_else(theta == 0, x, NA_real_))
+df
+```
+
+- We then compute the utility of disclosing, which is given by
+$$
+u_t(d_t = 1 \mid x_t) - u_t (d_t \mid x_t) = \alpha\left\{ x_t+P_{t}^{\textit{nd}}\right\} + \beta + \varepsilon_{t}.
+$$
+    - Effectively, $u_t (d_t \mid x_t)$ is normalized at zero.
+- To compute the utility, we have to compute the non-disclosure price, $P_t^{nd}$.
+    - To do so, note that we have to derive the fixed points of $\Gamma(y;p_t)$.
+    - Following the paper, we estimate $\Gamma(y; p_t)$ by the spline method.
+
+```{r}
+compute_fixedpt_Gamma
+```
+
+- When $p$ is close to zero, the fixed point algorithm fails because $p/(1-p)$ is too large.
+
+```{r}
+# compute fixed points for each p
+df_Pnd <- tibble(p = ((1:20)/21)^2) %>% 
+  mutate(P_nd = map_dbl(.x = p, .f = compute_fixedpt_Gamma,
+                        sigma_x = sigma_x, alpha = alpha, beta = beta,
+                        max_iter = 500)) 
+Pnd_splined <- splinefun(x = df_Pnd %>% pull(p),
+                         y = df_Pnd %>% pull(P_nd))
+
+# plot the estimate P_nd as a function of p
+qplot(p, P_nd, data= df_Pnd) +
+  stat_function(fun = Pnd_splined) +
+  theme_bw()
+
+# Compute P_nd for each p
+df <- df %>% 
+  mutate(P_nd = map_dbl(.x = p, .f = Pnd_splined))
+```
+
+- Now we can compute the utility of disclosure and thus the disclosure decision.
+```{r}
+df <- df %>% 
+  mutate(u = alpha * (x - P_nd) + beta + rnorm(N*Time)) %>% 
+  mutate(d = if_else(theta == 1 | u < 0, 0, 1))
+df
+```
+
+- We delete the value of $x_t$ for non-disclosure firms.
+```{r}
+df <- df %>% 
+  mutate(x = if_else(d == 1, x, NA_real_))
+df
+```
+
+
+- We look at the summary statistics and if that matches to Table II of the original paper. 
+
+```{r}
+df %>% 
+  select(-i, -t) %>% 
+  psych::describe(skew = FALSE) %>% 
+  select(-vars)
+```
+
+- Finally, we drop variables that are not observed.
+    - In the next section, we check if the estimation procedure can recover the parameters.
+    
+```{r}
+df_observed <- df %>% 
+  select(i, t, e, x, d)
+df_observed
+
+# save
+save(df_observed, file = here::here("./middle/df_observed.RData"))
+```
+
+# Model Identification
+- In this section, we replicate Figure 4.
+- Simulating observed data for a set of parameters, i.e., the procedure of the previous section, is summarized in  `simulate_model.R`.
+- Since each simulation takes a couple of minutes, we will use paralellization. 
+    - On my computer (Core i7-11370H 3.30GH, 32GB RAM), one simulation of the model takes about 30 seconds.
+
+- Density of disclosed information for each $\alpha$ (Top left)
+```{r}
+# parameters
+alpha_vec <- c(0, 1, 5, 20)
+
+# register cores
+library(doParallel)
+cl <- parallel::makePSOCKcluster(4)
+doParallel::registerDoParallel(cl)
+
+# simulate data for each alpha
+obj = foreach (i = seq_along(alpha_vec),
+               .packages = c('dplyr', 
+                             'purrr', 
+                             'tidyr',
+                             'BertomeuMaMarinovic')) %dopar% {
+                 BertomeuMaMarinovic::simulate_model(
+                   alpha_vec[i], 
+                   beta, sigma_x, sigma_e, p_11, p_01, N = 5*1e3, Time = 20
+                 )
+               }
+
+# kill finished tasks
+parallel::stopCluster(cl)
+
+# combine data
+temp <- list()
+for(k in seq_along(alpha_vec)){
+  temp[[k]] <- obj[[k]] %>% 
+    mutate(alpha = alpha_vec[k])
+}
+df_1 <- bind_rows(temp)
+rm(obj)
+
+# plot
+df_1 %>% 
+  filter(d == 1) %>%     # only disclosing sample
+  select(x, alpha) %>% 
+  ggplot(aes(x, group = factor(alpha))) + 
+  geom_density(aes(colour = factor(alpha)),
+                   size = 1,
+                   alpha = .8) +
+  theme_bw()
+```
+
+- Probability of disclosure for each $\beta$ and $\alpha$
+```{r}
+# parameters
+param_table <- 
+  expand_grid(alpha = seq(0, 5, .5),
+              beta = -2:2) %>% 
+  as.matrix()
+
+# register cores
+cl <- parallel::makePSOCKcluster(8)
+doParallel::registerDoParallel(cl)
+
+# simulate data for each alpha
+obj <-  foreach (i = 1:NROW(param_table),
+               .packages = c('dplyr',
+                             'purrr',
+                             'tidyr',
+                             'BertomeuMaMarinovic')) %dopar% {
+                 BertomeuMaMarinovic::simulate_model(
+                   param_table[i,1], param_table[i,2],
+                   sigma_x, sigma_e, p_11, p_01, N = 1e4, Time = 10
+                 )
+               }
+
+# kill finished tasks
+parallel::stopCluster(cl)
+
+# combine data
+temp <- list()
+for(k in 1:NROW(param_table)){
+  temp[[k]] <- obj[[k]] %>%
+    mutate(alpha = param_table[k,1],
+           beta = param_table[k,2])
+}
+df_2 <- bind_rows(temp)
+
+plot
+df_2 %>%
+  group_by(alpha, beta) %>% 
+  summarise(d = mean(d),
+            .groups = "drop") %>% 
+  ggplot(aes(x = alpha, y = d, group = factor(beta))) +
+  geom_point(aes(colour = factor(beta)),
+                   size = 1) +
+  geom_line(aes(colour = factor(beta))) +
+  theme_bw()
+```
+
+- 
+
+# Estimation
+- Using the simulated observed data, `df_observed`, we estimate the parameters.
+- Several details that are not (probably) not mentioned in the article.
+    - Estimation of $\Phi(k_0)$ and $\Phi(k_1)$.
+        - I guess they used MLE, but how did they decide the initial value of $p_t$?
+    - The computation of $L_t^0$.
+        - Computing $v_t$ involves numerical integration. How did they do that?
+
+- In this note, the estimation is conducted by the following steps:
+1. Estimate $\sigma_e$ from the observed earnings.
+2. Estimate the rest of the parameters using MLE.
+    - For each set of parameters, we compute $P^{nd}$ and then compute the likelihood function. 
+    - The initial value of $p_t$ is drawn from the beta distribution.
+
+- `compute_likelihood` computes the likelihood.
+    - To compute likelihood for a set of parameters, it takes about 10 seconds.
+```{r}
+# data
+load(here::here("./middle/df_observed.RData"))
+param <- c(alpha = 2.54, beta = .67, sigma_x = .32, p_11 = .96, p_01 = .11)
+compute_likelihood(param, df_observed)
+```
+
+- Optimization
+```{r}
+# # make cluster
+# library(parallel)
+# cl <- makeCluster(4)
+# setDefaultCluster(cl = cl)
+# clusterExport(cl, "df_observed")
+# clusterEvalQ(cl, {library(dplyr); library(magrittr); library(purrr);
+#                   library(tidyr); library(BertomeuMaMarinovic)})
+# 
+# # optimization
+# res <- optimParallel::optimParallel(
+#   param, compute_likelihood, df = df_observed,
+#   method = "L-BFGS-B",
+#   lower = c(-10, -10, 0.001, 0.001, 0.001),  # param = (alpha, beta, sigma_x, p_11, p_01)
+#   upper = c(10, 10, 5, sigma_e_hat, 0.999),  # sigma_e < sigma_x by construction
+#   control = list(fnscale = -1, 
+#                  trace = 6,
+#                  REPORT = 1),
+#   parallel = list(loginfo = TRUE, forward = FALSE))
+# 
+# # stop cluster
+# setDefaultCluster(cl=NULL); stopCluster(cl)
+# 
+# res
+```
+
+- Finally, we check the identification by plotting the likelihood around the true values.
+
+```{r}
+plot_list <- list()
+for(i in 1:5){
+  plot_list[[i]] <- plot_ll(param, df_observed, i)
+}
+plot_list
+```
+
