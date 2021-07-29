@@ -67,7 +67,8 @@ alpha <- 2.54
 beta <- .67
 
 # simulation
-Gamma_simulated <- compute_Gamma(p, sigma_x, alpha, beta)
+Gamma_simulated <- compute_Gamma(p, sigma_x, alpha, beta,
+                                 xi_random = rnorm(1e4))
 
 # plot
 ggplot(Gamma_simulated$df, aes(y, Gamma_val)) + 
@@ -95,8 +96,8 @@ sigma_x <- .32
 sigma_e <- .74
 alpha <- 2.54
 beta <- .67
-p_11 <- .96    # Phi(1 | 1): prob of theta = 1 to 1
-p_01 = .11     # Phi(1 | 0): prob of theta = 0 to 1
+p_11 <- .8    # Phi(1 | 1): prob of theta = 1 to 1
+p_01 <- .2     # Phi(1 | 0): prob of theta = 0 to 1
 
 # data length
 N <- 3 * 1e3
@@ -168,10 +169,11 @@ compute_fixedpt_Gamma
 
 ```{r}
 # compute fixed points for each p
+xi_random <- rnorm(1e4)   # random draw
 df_Pnd <- tibble(p = ((1:20)/21)^2) %>% 
   mutate(P_nd = map_dbl(.x = p, .f = compute_fixedpt_Gamma,
-                        sigma_x = sigma_x, alpha = alpha, beta = beta,
-                        max_iter = 500)) 
+                        xi_random = xi_random,
+                        sigma_x = sigma_x, alpha = alpha, beta = beta)) 
 Pnd_splined <- splinefun(x = df_Pnd %>% pull(p),
                          y = df_Pnd %>% pull(P_nd))
 
@@ -238,15 +240,19 @@ library(doParallel)
 cl <- parallel::makePSOCKcluster(4)
 doParallel::registerDoParallel(cl)
 
+xi_random <- rnorm(1e3)  # random draw
+
 # simulate data for each alpha
 obj = foreach (i = seq_along(alpha_vec),
                .packages = c('dplyr', 
                              'purrr', 
                              'tidyr',
                              'BertomeuMaMarinovic')) %dopar% {
-                 BertomeuMaMarinovic::simulate_model(
+                 simulate_model(
                    alpha_vec[i], 
-                   beta, sigma_x, sigma_e, p_11, p_01, N = 5*1e3, Time = 20
+                   beta, sigma_x, sigma_e, p_11, p_01,
+                   N = 5*1e3, Time = 20,
+                   xi_random = xi_random
                  )
                }
 
@@ -256,11 +262,10 @@ parallel::stopCluster(cl)
 # combine data
 temp <- list()
 for(k in seq_along(alpha_vec)){
-  temp[[k]] <- obj[[k]] %>% 
+  temp[[k]] <- obj[[k]]$df %>% 
     mutate(alpha = alpha_vec[k])
 }
 df_1 <- bind_rows(temp)
-rm(obj)
 
 # plot
 df_1 %>% 
@@ -276,9 +281,9 @@ df_1 %>%
 - Probability of disclosure for each $\beta$ and $\alpha$
 ```{r}
 # parameters
-param_table <- 
+param_table <-
   expand_grid(alpha = seq(0, 5, .5),
-              beta = -2:2) %>% 
+              beta = -2:2) %>%
   as.matrix()
 
 # register cores
@@ -293,7 +298,9 @@ obj <-  foreach (i = 1:NROW(param_table),
                              'BertomeuMaMarinovic')) %dopar% {
                  BertomeuMaMarinovic::simulate_model(
                    param_table[i,1], param_table[i,2],
-                   sigma_x, sigma_e, p_11, p_01, N = 1e4, Time = 10
+                   sigma_x, sigma_e, p_11, p_01,
+                   N = 5*1e3, Time = 20,
+                   xi_random = xi_random
                  )
                }
 
@@ -303,25 +310,130 @@ parallel::stopCluster(cl)
 # combine data
 temp <- list()
 for(k in 1:NROW(param_table)){
-  temp[[k]] <- obj[[k]] %>%
+  temp[[k]] <- obj[[k]]$df %>%
     mutate(alpha = param_table[k,1],
            beta = param_table[k,2])
 }
 df_2 <- bind_rows(temp)
 
-plot
 df_2 %>%
-  group_by(alpha, beta) %>% 
+  group_by(alpha, beta) %>%
   summarise(d = mean(d),
-            .groups = "drop") %>% 
+            .groups = "drop") %>%
   ggplot(aes(x = alpha, y = d, group = factor(beta))) +
   geom_point(aes(colour = factor(beta)),
-                   size = 1) +
-  geom_line(aes(colour = factor(beta))) +
+                   size = 2) +
+  geom_line(aes(colour = factor(beta)),
+            size = 1.5,
+            alpha = .8) +
   theme_bw()
 ```
 
-- 
+- Nondisclosure price at $p=0.25$ and average disclosure price $\mathbb{E}[x_t \mid d_t = 1]$
+```{r}
+# parameters
+beta_vec <- seq(0, 3.5, .2)
+
+# register cores
+library(doParallel)
+cl <- parallel::makePSOCKcluster(4)
+doParallel::registerDoParallel(cl)
+
+xi_random <- rnorm(1e3)  # random draw
+
+# simulate data for each alpha
+obj <- foreach (i = seq_along(beta_vec),
+               .packages = c('dplyr', 
+                             'purrr', 
+                             'tidyr',
+                             'BertomeuMaMarinovic')) %dopar% {
+                 simulate_model(
+                   alpha, beta_vec[i],
+                   sigma_x, sigma_e, p_11, p_01,
+                   N = 5 * 1e3, Time = 20,
+                   xi_random = xi_random
+                 )
+               }
+
+# kill finished tasks
+parallel::stopCluster(cl)
+
+# combine data
+temp <- list()
+for(k in seq_along(beta_vec)){
+  temp[[k]] <- obj[[k]]$df %>% 
+    mutate(beta = beta_vec[k]) %>% 
+    mutate(Pnd = obj[[k]]$Pnd(0.25))
+}
+df_3 <- bind_rows(temp)
+rm(obj)
+
+# plot
+df_3 %>% 
+  group_by(beta) %>% 
+  summarize(Pnd = mean(Pnd),
+            x = mean(x, na.rm = TRUE),
+            .groups = "drop") %>% 
+  pivot_longer(-beta, names_to = "variable") %>% 
+  ggplot(aes(beta, value)) + 
+  geom_point(aes(colour = variable), size = 2) + 
+  geom_line(aes(colour = variable), size = 1.5, alpha = .8) +
+  theme_bw()
+```
+
+- The "disclosure premium" for each $\beta$.
+```{r}
+# parameters
+param_table <-
+  expand_grid(alpha = c(0.2, 0.7),
+              beta = seq(0, 3.5, 0.2)) %>%
+  as.matrix()
+
+# register cores
+cl <- parallel::makePSOCKcluster(8)
+doParallel::registerDoParallel(cl)
+
+# simulate data for each alpha
+obj <-  foreach (i = 1:NROW(param_table),
+               .packages = c('dplyr',
+                             'purrr',
+                             'tidyr',
+                             'BertomeuMaMarinovic')) %dopar% {
+                 BertomeuMaMarinovic::simulate_model(
+                   param_table[i,1], param_table[i,2],
+                   sigma_x, sigma_e, p_11, p_01,
+                   N = 1e4, Time = 20,
+                   xi_random = xi_random
+                 )
+               }
+
+# kill finished tasks
+parallel::stopCluster(cl)
+
+# combine data
+temp <- list()
+for(k in 1:NROW(param_table)){
+  temp[[k]] <- obj[[k]]$df %>%
+    mutate(alpha = param_table[k,1],
+           beta = param_table[k,2]) %>% 
+    mutate(Pnd = obj[[k]]$Pnd(0.25))
+}
+df_4 <- bind_rows(temp)
+
+df_4 %>%
+  group_by(alpha, beta) %>%
+  summarise(x = mean(x, na.rm = TRUE),
+            Pnd = mean(Pnd),
+            .groups = "drop") %>%
+  mutate(premium = x - Pnd) %>%
+  ggplot(aes(beta, premium)) +
+  geom_point(aes(colour = factor(alpha)),
+                   size = 2) +
+  geom_line(aes(colour = factor(alpha)), size = 1.5,
+            alpha = 0.8) +
+  theme_bw()
+```
+
 
 # Estimation
 - Using the simulated observed data, `df_observed`, we estimate the parameters.
@@ -342,8 +454,16 @@ df_2 %>%
 ```{r}
 # data
 load(here::here("./middle/df_observed.RData"))
-param <- c(alpha = 2.54, beta = .67, sigma_x = .32, p_11 = .96, p_01 = .11)
-compute_likelihood(param, df_observed)
+param <- c(alpha = 2.54, beta = .67, sigma_x = .32, p_11 = .8, p_01 = .2)
+
+# random draw (should be outside of parameter iteration)
+sigma_e_hat <- sd(df_observed %>% pull(e))
+x_random <- rnorm(1e3, 
+                  mean = sigma_x^2/sigma_e_hat^2,
+                  sd = sqrt(sigma_x^2 * (1 - sigma_x^2/sigma_e_hat^2)))
+xi_random <- rnorm(1e3)  
+
+compute_likelihood(param, df_observed, xi_random, x_random)
 ```
 
 - Optimization
@@ -378,8 +498,10 @@ compute_likelihood(param, df_observed)
 ```{r}
 plot_list <- list()
 for(i in 1:5){
-  plot_list[[i]] <- plot_ll(param, df_observed, i)
+  plot_list[[i]] <- plot_ll(param, df_observed, i, 
+                            xi_random, x_random)
 }
-plot_list
+
+wrap_plots(plot_list)
 ```
 

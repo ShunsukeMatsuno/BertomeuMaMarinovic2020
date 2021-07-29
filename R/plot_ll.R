@@ -1,4 +1,5 @@
-plot_ll <- function(param, df_observed, plot_param_index, points_plot = 16){
+plot_ll <- function(param, df_observed, plot_param_index,
+                    xi_random, x_random, points_plot = 16){
   # param = (alpha, beta, sigma_x, p_11, p_01)
   
   sigma_e_hat <- sd(df_observed %>% pull(e))
@@ -33,7 +34,8 @@ plot_ll <- function(param, df_observed, plot_param_index, points_plot = 16){
                  .combine = rbind) %dopar%{
                    param_temp <- param
                    param_temp[plot_param_index] <- param_vec[i]
-                   BertomeuMaMarinovic::compute_likelihood(param_temp, df_observed)
+                   compute_likelihood(param_temp, df_observed,
+                                      xi_random, x_random)
                  }
 
   # delete finished tasks
@@ -47,6 +49,6 @@ plot_ll <- function(param, df_observed, plot_param_index, points_plot = 16){
     geom_vline(xintercept = param[plot_param_index], lty = 2) + 
     xlab(c("alpha", "beta", "sigma_x", "p_11", "p_01")[plot_param_index]) +
     theme_bw()
-  plot(p)
+  return(p)
   
 }

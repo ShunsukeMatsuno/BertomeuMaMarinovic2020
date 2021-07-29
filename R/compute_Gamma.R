@@ -23,9 +23,8 @@ compute_Gamma <- function(p, sigma_x, alpha, beta, xi_random,
   }
   
   # simulate normal variables and take mean
-
   df_Gamma <- tibble(y = seq(interval[1], interval[2], .1)) %>% 
-    mutate(Gamma_val = map_dbl(.x = y, .f = compute_Gamma_val, xi = xi,
+    mutate(Gamma_val = map_dbl(.x = y, .f = compute_Gamma_val, xi = xi_random,
                                p = p, sigma_x = sigma_x, alpha = alpha, beta = beta)) 
   Gamma_splined <- splinefun(x = df_Gamma %>% pull(y),
                              y = df_Gamma %>% pull(Gamma_val))

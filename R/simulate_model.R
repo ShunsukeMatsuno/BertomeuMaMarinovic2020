@@ -1,5 +1,5 @@
 simulate_model <- function(alpha, beta, sigma_x, sigma_e, p_11, p_01, p_init = .3, 
-                           N = 1e3, Time = 10){
+                           N = 1e3, Time = 10, xi_random){
   # Simulate data that would have been observed for a set of parameters.
   
   # simulate p and theta
@@ -21,10 +21,9 @@ simulate_model <- function(alpha, beta, sigma_x, sigma_e, p_11, p_01, p_init = .
   
   # compute fixed points for each p
   df_Pnd <- tibble(p = ((1:20)/21)^2) %>% 
-    slice(5:n()) %>% 
     mutate(P_nd = map_dbl(.x = p, .f = compute_fixedpt_Gamma,
                           sigma_x = sigma_x, alpha = alpha, beta = beta,
-                          max_iter = 500)) 
+                          xi_random = xi_random)) 
   Pnd_splined <- splinefun(x = df_Pnd %>% pull(p),
                            y = df_Pnd %>% pull(P_nd))
   
@@ -38,5 +37,6 @@ simulate_model <- function(alpha, beta, sigma_x, sigma_e, p_11, p_01, p_init = .
     mutate(d = if_else(theta == 1 | u < 0, 0, 1)) %>% 
     mutate(x = if_else(d == 1, x, NA_real_))
   
-  return(df %>% select(i, t, e, x, d))
+  return(list(df = df %>% select(i, t, e, x, d),
+              Pnd = Pnd_splined))
 }
